@@ -219,10 +219,6 @@ function toast(msg) {
 const Dashboard = {
   mount(el) {
     el.innerHTML = `
-      <div class="grid g2">
-        <div class="panel"><h2>Top skilling methods</h2><div id="d-skill"></div></div>
-        <div class="panel"><h2>Smart sells from your bank</h2><p class="intro small">Items you own that are trading above their usual price right now. Sell while the price is up.</p><div id="d-sells"></div></div>
-      </div>
       <div class="panel">
         <h2>Smart Plan</h2>
         <p class="intro">The best flips for your cash and free GE slots. <b>Pin</b> one to start: the app walks you through each step and keeps the numbers up to date.</p>
@@ -237,6 +233,10 @@ const Dashboard = {
         </div>
         <div id="p-pinned"></div>
         <div id="p-out"></div>
+      </div>
+      <div class="grid g2">
+        <div class="panel"><h2>Top skilling methods</h2><div id="d-skill"></div></div>
+        <div class="panel"><h2>Smart sells from your bank</h2><p class="intro small">Items you own that are trading above their usual price right now. Sell while the price is up.</p><div id="d-sells"></div></div>
       </div>`;
     const b = $('#p-budget'), sl = $('#p-slots'), rk = $('#p-risk'), hz = $('#p-hz');
     rk.value = S().risk; hz.value = String(S().horizonHours);
