@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GE Helper</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪙</text></svg>">
+</head>
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <div class="brand">GE Helper <span>· OSRS</span></div>
+      <nav class="tabs" id="tabs">
+        <a href="#dashboard">Dashboard</a>
+        <a href="#flips">Quick Flips</a>
+        <a href="#skilling">Skilling Profits</a>
+        <a href="#analysis">Deep Analysis</a>
+        <a href="#trades">My Trades</a>
+        <a href="#character">Character &amp; Bank</a>
+        <a href="#settings">Settings &amp; Help</a>
+      </nav>
+      <div class="status" id="status"></div>
+    </div>
+  </header>
+  <main id="view"><div class="empty">Loading Grand Exchange data…</div></main>
+  <datalist id="item-names"></datalist>
+  <script src="config.js"></script>
+  <script src="recipes.js"></script>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

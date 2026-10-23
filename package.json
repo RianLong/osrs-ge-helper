@@ -1,0 +1,8 @@
+{
+  "name": "osrs-ge-helper",
+  "version": "1.0.0",
+  "description": "Local Grand Exchange trading assistant for Old School RuneScape",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "license": "MIT"
+}
