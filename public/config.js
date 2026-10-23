@@ -2,5 +2,5 @@
 // hiscoresProxy: the address of your Cloudflare Worker from worker/hiscores.js,
 // e.g. https://ge-hiscores.yourname.workers.dev  (can also be set in Settings & Help).
 const CONFIG = {
-  hiscoresProxy: '',
+  hiscoresProxy: 'https://ge-hiscores.rianmckeelong.workers.dev',
 };
