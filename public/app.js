@@ -183,7 +183,7 @@ function renderStatus() {
 
 // ---------------- trade helpers ----------------
 function addTrade(t) {
-  state.trades.push({ uid: Math.random().toString(36).slice(2), placedAt: Date.now(), firstBuyAt: null, stage: 'buying', sellPrice: null, ...t });
+  state.trades.push({ uid: Math.random().toString(36).slice(2), placedAt: Date.now(), firstBuyAt: null, stage: 'pinned', sellPrice: null, ...t });
   save();
 }
 function tradeProfit(t, sellPrice) {
@@ -203,9 +203,9 @@ function notify(title, body) {
   new Notification(title, { body });
 }
 function trackFlip(f, units) {
-  if (state.trades.some(t => t.id === f.id && t.stage === 'buying')) return toast(`${f.name} is already pinned as a buy offer.`);
+  if (state.trades.some(t => t.id === f.id && ['pinned', 'buying'].includes(t.stage))) return toast(`${f.name} is already pinned.`);
   addTrade({ id: f.id, qty: units || f.units4h, buyPrice: f.buy, sellPrice: f.sell });
-  toast(`Tracking ${f.name}: place a buy offer for ${num(units || f.units4h)} at ${gp(f.buy)}.`);
+  toast(`Pinned ${f.name} to the Smart Plan on the Dashboard.`);
 }
 function toast(msg) {
   const t = document.createElement('div');
@@ -219,10 +219,13 @@ function toast(msg) {
 const Dashboard = {
   mount(el) {
     el.innerHTML = `
-      <div class="cards" id="d-cards"></div>
-      <div class="panel" style="margin-top:16px">
-        <h2>Smart Plan — what to put in your GE slots right now</h2>
-        <p class="intro">Picks the best set of flips for your cash and free slots, weighting each by how trustworthy it is. Hit <b>Track</b> when you place a buy offer: it pins to the top and walks you through <b>Bought → Listed → Sold</b>, re-checking prices at every step.</p>
+      <div class="grid g2">
+        <div class="panel"><h2>Top skilling methods</h2><div id="d-skill"></div></div>
+        <div class="panel"><h2>Smart sells from your bank</h2><p class="intro small">Items you own that are trading above their usual price right now. Sell while the price is up.</p><div id="d-sells"></div></div>
+      </div>
+      <div class="panel">
+        <h2>Smart Plan</h2>
+        <p class="intro">The best flips for your cash and free GE slots. <b>Pin</b> one to start: the app walks you through each step and keeps the numbers up to date.</p>
         <div class="controls">
           <label>Cash to use<input type="text" id="p-budget" value="${gp(budget())}" size="10"></label>
           <label>Free GE slots<input type="number" id="p-slots" min="1" max="8" value="${S().slots}" style="width:70px"></label>
@@ -234,39 +237,51 @@ const Dashboard = {
         </div>
         <div id="p-pinned"></div>
         <div id="p-out"></div>
-      </div>
-      <div class="grid g3">
-        <div class="panel"><h2>Price dips</h2><p class="intro small">Down vs. their 24h average. Possible bargains — open Deep Analysis to check it's not still falling.</p><div id="mv-dips"></div></div>
-        <div class="panel"><h2>Price spikes</h2><p class="intro small">Up vs. 24h average. If you own any, this may be a good time to sell.</p><div id="mv-spikes"></div></div>
-        <div class="panel"><h2>Volume surges</h2><p class="intro small">Trading much more than usual this hour — news, updates, or merchants moving in.</p><div id="mv-surges"></div></div>
-      </div>
-      <div class="panel"><h2>Best skilling profits for you</h2><div id="d-skill"></div></div>`;
+      </div>`;
     const b = $('#p-budget'), sl = $('#p-slots'), rk = $('#p-risk'), hz = $('#p-hz');
     rk.value = S().risk; hz.value = String(S().horizonHours);
     b.onchange = () => { const v = parseGpInput(b.value); S().budget = v; b.value = gp(budget()); save(); this.update(); renderStatus(); };
     sl.onchange = () => { S().slots = Math.max(1, Math.min(8, +sl.value || 1)); save(); this.update(); };
     rk.onchange = () => { S().risk = rk.value; save(); this.update(); };
     hz.onchange = () => { S().horizonHours = +hz.value; save(); compute(); this.update(); };
-    $('#p-pinned').addEventListener('click', (e) => this.onPinned(e));
+    const pinned = $('#p-pinned');
+    pinned.addEventListener('click', (e) => this.onPinned(e));
+    pinned.addEventListener('change', (e) => this.onInput(e));
+    pinned.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches('input')) e.target.blur(); });
   },
+
+  // Quantity and price boxes: typing a price stops the app from auto-updating it.
+  onInput(e) {
+    const inp = e.target.closest('input[data-f]'); if (!inp) return;
+    const t = state.trades.find(x => x.uid === inp.closest('[data-uid]').dataset.uid); if (!t) return;
+    const v = parseGpInput(inp.value);
+    if (!v) { toast('Enter a number, like 1500 or 1.5k.'); this.renderPinned(true); return; }
+    t[inp.dataset.f] = v;
+    if (inp.dataset.f === 'buyPrice') t.buyLocked = true;
+    if (inp.dataset.f === 'sellPrice') t.sellLocked = true;
+    save(); this.update(true);
+  },
+
   async onPinned(e) {
-    const b = e.target.closest('[data-act]'); if (!b) return;
+    const b = e.target.closest('button[data-act]'); if (!b) return;
     const t = state.trades.find(x => x.uid === b.closest('[data-uid]').dataset.uid); if (!t) return;
     const name = mk.items.get(t.id)?.name;
     const a = E.adviseTrade(mk, t, S());
     switch (b.dataset.act) {
+      case 'placed-buy':
+        t.stage = 'buying'; t.placedAt = Date.now(); break;
       case 'bought': {
-        t.stage = 'holding'; t.firstBuyAt ||= Date.now(); t.placedAt = Date.now();
-        save(); this.update();
+        t.stage = 'holding'; t.firstBuyAt ||= Date.now(); t.placedAt = Date.now(); t.sellLocked = false;
+        save(); this.update(true);
         await refresh(); // re-price the sale with the freshest numbers
         const n = E.adviseTrade(mk, t, S());
         toast(n.verdict === 'sell'
-          ? `Prices refreshed: list ${name} at ${n.listAt.toLocaleString()}.`
-          : `Prices refreshed: ${name} is below breakeven. Hold it, or list at breakeven (${n.listAt.toLocaleString()}).`);
+          ? `Prices refreshed: sell ${name} at ${n.listAt.toLocaleString()}.`
+          : `Prices refreshed: ${name} is below breakeven right now. Hold it, or sell at breakeven (${n.listAt.toLocaleString()}).`);
         return;
       }
-      case 'listed':
-        t.sellPrice = a.listAt; t.stage = 'selling'; t.placedAt = Date.now(); break;
+      case 'placed-sell':
+        t.sellPrice = this.sellShown(t, a); t.stage = 'selling'; t.placedAt = Date.now(); break;
       case 'sold':
         state.history.unshift({ id: t.id, qty: t.qty, buyPrice: t.buyPrice, sellPrice: t.sellPrice, profit: tradeProfit(t, t.sellPrice), closedAt: Date.now() });
         state.trades = state.trades.filter(x => x !== t);
@@ -274,100 +289,129 @@ const Dashboard = {
       case 'use':
         if (t.stage === 'buying') t.buyPrice = a.suggest; else t.sellPrice = a.suggest;
         t.placedAt = Date.now(); break;
-      case 'edit': {
-        const q = parseGpInput(prompt('Quantity?', t.qty)); if (!q) return;
-        const field = t.stage === 'selling' ? 'sellPrice' : 'buyPrice';
-        const p = parseGpInput(prompt(t.stage === 'selling' ? 'Your sell price per item?' : 'Your buy price per item?', t[field])); if (!p) return;
-        t.qty = q; t[field] = p; break;
-      }
       case 'unpin':
-        if (t.stage !== 'buying' && !confirm(`Unpin ${name} without recording a sale?`)) return;
+        if (['holding', 'selling'].includes(t.stage) && !confirm(`Unpin ${name} without recording a sale?`)) return;
         state.trades = state.trades.filter(x => x !== t); break;
     }
-    save(); this.update();
+    save(); this.update(true);
   },
-  renderPinned() {
+
+  sellShown(t, a) { return t.sellLocked && t.sellPrice ? t.sellPrice : a.listAt; },
+
+  renderPinned(force) {
     const el = $('#p-pinned');
+    // Don't redraw under the user's cursor while they're typing in a box.
+    if (!force && el.contains(document.activeElement) && document.activeElement.matches('input')) return;
     if (!state.trades.length) { el.innerHTML = ''; return; }
     const s = S();
-    const STEP = { buying: ['1', 'Buying', 'Buy'], holding: ['2', 'Bought, list it', 'Sell'], selling: ['3', 'Listed', 'Sell'] };
+    const box = (t, f, w = 9) => `<input type="text" class="pin-in" data-f="${f}" value="${(t[f] ?? '').toLocaleString()}" size="${w}">`;
+    const watch = (a, f) => {
+      // Buying / selling: only speak up when something needs attention.
+      const lines = [];
+      if (a.level === 'act' || a.level === 'warn') lines.push(`<span class="${a.level === 'act' ? 'warn' : 'warn'}">⚠️ ${esc(a.text)}</span>`);
+      if (f && f.conf < 0.7) f.risks.slice(0, 2).forEach(r => lines.push(`<span class="muted">Watch out: ${esc(r)}</span>`));
+      return lines.length ? lines.join('<br>') : '<span class="muted">✓ No price changes. Waiting for your offer to fill.</span>';
+    };
     const rows = state.trades.map(t => {
       const a = E.adviseTrade(mk, t, s);
-      const [n, label, side] = STEP[t.stage] || STEP.buying;
-      // Numbers follow the stage: what you're buying at first, what you're selling at after.
-      const price = t.stage === 'buying' ? t.buyPrice : t.stage === 'holding' ? a.listAt : t.sellPrice;
-      const sellAt = t.stage === 'buying' ? a.sellNow : price;
-      const profit = sellAt ? (sellAt - E.tax(sellAt, s, t.id) - t.buyPrice) * t.qty : null;
-      const total = (price || 0) * t.qty;
-      const verdict = t.stage === 'holding' ? (a.verdict === 'sell' ? '<span class="badge buy">SELL</span> ' : '<span class="badge caution">HOLD</span> ') : '';
-      const cta = { buying: '<button class="sm primary" data-act="bought">Bought</button>', holding: '<button class="sm primary" data-act="listed">Listed</button>', selling: '<button class="sm primary" data-act="sold">Sold</button>' }[t.stage];
-      const use = a.suggest && a.suggest !== price ? `<button class="sm" data-act="use" title="Apply the suggested price">Use ${a.suggest.toLocaleString()}</button>` : '';
-      return `<tr class="pin ${a.level}" data-uid="${t.uid}">
-        <td>${itemLink(t.id)}</td>
-        <td><span class="stage">${n} · ${label}</span></td>
-        <td class="num"><span class="muted small">${side}:</span> ${t.qty.toLocaleString()}</td>
-        <td class="num"><span class="muted small">${side}:</span> <b>${price != null ? price.toLocaleString() : '—'}</b></td>
-        <td class="num">${gp(total)}</td>
-        <td class="num">${profit != null ? signed(profit) : '—'}</td>
-        <td class="pin-advice">${verdict}${esc(a.text)}</td>
-        <td class="pin-acts">${use}${cta}<button class="sm" data-act="edit" title="Edit quantity or price">✎</button><button class="sm" data-act="unpin" title="Unpin">✕</button></td>
-      </tr>`;
+      const f = derived.flips.find(x => x.id === t.id);
+      // While only pinned, keep the buy price matched to the live market unless you typed your own.
+      if (t.stage === 'pinned' && f && !t.buyLocked && t.buyPrice !== f.buy) { t.buyPrice = f.buy; t.sellPrice = f.sell; }
+      let step, qtyLabel, info, cta, use = '';
+      if (t.stage === 'pinned') {
+        const sellAt = f?.sell ?? a.sellNow;
+        const profit = (sellAt - E.tax(sellAt, s, t.id) - t.buyPrice) * t.qty;
+        step = '1 · Place buy offer'; qtyLabel = 'Buy quantity';
+        info = `<div class="pin-fields"><label>Buy price per item ${box(t, 'buyPrice')}</label>
+          <span>Cost <b>${gp(t.buyPrice * t.qty)}</b></span><span>Profit ${signed(profit)}</span></div>`;
+        cta = '<button class="sm primary" data-act="placed-buy">Offer Placed</button>';
+      } else if (t.stage === 'buying') {
+        step = '2 · Waiting to buy'; qtyLabel = 'Buy quantity';
+        info = watch(a, f);
+        cta = '<button class="sm primary" data-act="bought">Bought</button>';
+        if (a.suggest && a.suggest !== t.buyPrice) use = `<button class="sm" data-act="use" title="Change your offer to this price">Use ${a.suggest.toLocaleString()}</button>`;
+      } else if (t.stage === 'holding') {
+        const price = this.sellShown(t, a);
+        if (!t.sellLocked) t.sellPrice = price;
+        const profit = (price - E.tax(price, s, t.id) - t.buyPrice) * t.qty;
+        step = '3 · Place sell offer'; qtyLabel = 'Sell quantity';
+        info = `<div class="pin-fields">${a.verdict === 'sell' ? '<span class="badge buy">SELL</span>' : '<span class="badge caution">HOLD</span>'}
+          <label>Sell price per item ${box(t, 'sellPrice')}</label><span>Profit ${signed(profit)}</span></div>
+          ${a.verdict === 'sell' ? '' : `<div class="small warn" style="margin-top:4px">${esc(a.text)}</div>`}`;
+        cta = '<button class="sm primary" data-act="placed-sell">Offer Placed</button>';
+      } else {
+        step = '4 · Waiting to sell'; qtyLabel = 'Sell quantity';
+        info = `<div class="small muted" style="margin-bottom:2px">Listed at ${t.sellPrice.toLocaleString()} · profit ${signed(tradeProfit(t, t.sellPrice))}</div>${watch(a, null)}`;
+        cta = '<button class="sm primary" data-act="sold">Sold</button>';
+        if (a.suggest && a.suggest !== t.sellPrice) use = `<button class="sm" data-act="use" title="Change your offer to this price">Use ${a.suggest.toLocaleString()}</button>`;
+      }
+      return `<div class="pin-card ${t.stage === 'pinned' || t.stage === 'holding' ? 'ok' : a.level}" data-uid="${t.uid}">
+        <div class="pin-head">${itemLink(t.id)}<span class="stage">${step}</span></div>
+        <label class="pin-qty">${qtyLabel}${box(t, 'qty', 7)}</label>
+        <div class="pin-advice">${info}</div>
+        <div class="pin-acts">${use}${cta}<button class="sm" data-act="unpin" title="Unpin">✕</button></div>
+      </div>`;
     }).join('');
-    el.innerHTML = `<h3 style="margin:4px 0 8px">📌 Your active trades</h3><div class="tbl-wrap"><table class="tbl pinned"><thead><tr>
-      <th>Item</th><th>Step</th><th class="num">Quantity</th><th class="num">Price per item</th><th class="num">Total</th><th class="num">Profit</th><th>What to do</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-      <h3 style="margin:18px 0 8px">Suggested next flips</h3>`;
+    el.innerHTML = `<h3 style="margin:4px 0 8px">📌 Pinned trades</h3>${rows}
+      <h3 style="margin:18px 0 8px">Suggested flips</h3>`;
   },
-  update() {
-    const tradesVal = state.trades.reduce((a, t) => a + (E.adviseTrade(mk, t, S()).unrealized || 0), 0);
-    const realized = state.history.reduce((a, h) => a + h.profit, 0);
-    const today = state.history.filter(h => Date.now() - h.closedAt < 864e5).reduce((a, h) => a + h.profit, 0);
-    const bankVal = [...bankMap()].reduce((a, [id, q]) => a + (id === E.COINS_ID ? q : id === E.PLAT_ID ? q * 1000 : (mk.instaSell(id) || 0) * q), 0);
-    $('#d-cards').innerHTML = `
-      <div class="card"><div class="k">Cash available</div><div class="v">${gp(budget())}</div><div class="s">${state.bank.length ? 'from your bank import' : S().budget ? 'set manually' : 'default — import your bank'}</div></div>
-      <div class="card"><div class="k">Bank value</div><div class="v">${state.bank.length ? gp(bankVal) : '—'}</div><div class="s">${state.bankUpdated ? 'imported ' + E.fmtAge((Date.now() - state.bankUpdated) / 60000) + ' ago' : '<a href="#character">import your bank</a>'}</div></div>
-      <div class="card"><div class="k">Active trades</div><div class="v">${state.trades.length}</div><div class="s">open P/L if sold now: ${signed(tradesVal)}</div></div>
-      <div class="card"><div class="k">Profit tracked</div><div class="v">${signed(realized)}</div><div class="s">last 24h: ${signed(today)}</div></div>
-      <div class="card"><div class="k">Flips found</div><div class="v">${derived.flips.length}</div><div class="s">${derived.flips.filter(f => f.conf >= 0.7).length} high-confidence</div></div>`;
 
-    // Suggestions only use the slots and cash your tracked trades aren't already using.
-    this.renderPinned();
+  renderSkilling() {
+    const sk = [...derived.recipes, ...derived.alchs].filter(r => r.canDo !== false && r.profit > 0 && r.outVol > 5).sort((a, b) => b.gpHr - a.gpHr).slice(0, 5);
+    $('#d-skill').innerHTML = sk.length ? `<div class="list-compact">${sk.map(r => `<div class="r"><span>${chip(r.outs[0]?.it || r.ins[0].it, 1)} <b>${esc(r.name)}</b> <span class="muted small">${r.skill ? r.skill + ' ' + r.level : 'no skill'}</span></span><span class="num">${signed(r.gpHr)}/hr</span></div>`).join('')}</div>
+      <p class="small muted">${levels() ? 'Filtered to your levels.' : '<a href="#character">Load your character</a> to filter by your levels.'} <a href="#skilling">See all →</a></p>` : '<div class="empty">No data yet.</div>';
+  },
+
+  // Bank items trading above their 24h average. Uses last hour's averages so a single
+  // odd trade doesn't count as a surge.
+  renderSells() {
+    const el = $('#d-sells');
+    const bank = bankMap();
+    if (!bank.size) { el.innerHTML = '<div class="empty"><a href="#character">Import your bank</a> to see what to sell.</div>'; return; }
+    const rows = [];
+    for (const [id, qty] of bank) {
+      const it = mk.items.get(id), p = mk.p(id), m24 = mk.mid24(id);
+      if (!it || !p || !p.a1hi || !p.a1lo || p.v1hi + p.v1lo < 3 || !m24) continue;
+      const m1 = (p.a1hi + p.a1lo) / 2, change = m1 / m24 - 1;
+      const sellAt = mk.sellRef(id) - 1;
+      if (change < 0.03 || sellAt * qty < 10000) continue;
+      const vol = (p.v1hi + p.v1lo) / ((p.v24hi + p.v24lo) / 24 || 1);
+      rows.push({ id, qty, sellAt, change, extra: (m1 - m24) * qty, net: (sellAt - E.tax(sellAt, S(), id)) * qty, vol });
+    }
+    rows.sort((a, b) => b.extra - a.extra);
+    el.innerHTML = rows.length ? `<div class="list-compact">${rows.slice(0, 6).map(r => `<div class="r">
+        <span>${itemLink(r.id)} <span class="muted small">${r.qty.toLocaleString()} × ${r.sellAt.toLocaleString()}${r.vol > 2 ? ` · ${r.vol.toFixed(1)}× normal volume` : ''}</span></span>
+        <span class="num">${signedPct(r.change)} <span class="small muted">(+${gp(r.extra)} vs usual)</span></span></div>`).join('')}</div>`
+      : '<div class="empty">Nothing in your bank is up in price right now.</div>';
+  },
+
+  update(force) {
+    this.renderSkilling();
+    this.renderSells();
+    this.renderPinned(force);
+
+    // Suggestions only use the slots and cash your pinned trades aren't already using.
     const tracked = new Set(state.trades.map(t => t.id));
     const tied = state.trades.reduce((a, t) => a + t.buyPrice * t.qty, 0);
     const freeCash = Math.max(0, budget() - tied), freeSlots = Math.max(0, S().slots - state.trades.length);
     const res = E.plan(derived.flips.filter(f => !tracked.has(f.id)), { ...S() }, freeCash, freeSlots, RISK[S().risk]);
     const out = $('#p-out');
-    if (!freeSlots) { out.innerHTML = '<div class="empty">All your GE slots are in use. Finish a trade to get a new suggestion.</div>'; }
-    else if (!res.chosen.length && tied && freeCash < budget() * 0.1) { out.innerHTML = `<div class="empty">Your cash is tied up in active trades (${gp(tied)}). Finish one, or raise "Cash to use", to get new suggestions.</div>`; }
-    else if (!res.chosen.length) { out.innerHTML = '<div class="empty">No flips fit these settings. Try more cash, a longer time window, or a higher risk level.</div>'; }
-    else {
-      out.innerHTML = `<div class="notice">Expected profit: <b>${gp(res.profit)}</b> using ${gp(res.used)} of ${gp(freeCash)} free cash in ${res.chosen.length} of ${freeSlots} free slot(s). Per round of buy limits (4h).</div>`;
-      out.appendChild(table('plan', [
-        { key: 'name', label: 'Item', fmt: r => itemLink(r.id), sort: r => r.name },
-        // Same order as the in-game GE offer screen: quantity, then price per item.
-        { key: 'units', label: 'Buy: Quantity', num: 1, fmt: r => r.units.toLocaleString() },
-        { key: 'buy', label: 'Buy: Price per item', num: 1, fmt: r => r.buy.toLocaleString() },
-        { key: 'sellUnits', label: 'Sell: Quantity', num: 1, fmt: r => r.units.toLocaleString(), sort: r => r.units },
-        { key: 'sell', label: 'Sell: Price per item', num: 1, fmt: r => r.sell.toLocaleString() },
-        { key: 'cost', label: 'Cost', num: 1, fmt: r => gp(r.cost) },
-        { key: 'expProfit', label: 'Profit', num: 1, fmt: r => signed(r.expProfit) },
-        { key: 'fillHours', label: 'Fill time', num: 1, fmt: r => E.fmtHours(r.fillHours) },
-        { key: 'conf', label: 'Confidence', fmt: r => confBadge(r.conf) },
-        { key: 'act', label: '', fmt: () => '<button class="sm primary" data-act="track">Track</button>' },
-      ], res.chosen, {
-        sortKey: 'expProfit',
-        detail: flipDetail,
-        onAction: (a, r) => { if (a === 'track') { trackFlip(r, r.units); this.update(); } },
-      }));
-    }
-
-    const mv = derived.movers;
-    const moverList = (rows, fmt) => rows.length ? `<div class="list-compact">${rows.map(r => `<div class="r">${itemLink(r.id)}<span class="num">${fmt(r)}</span></div>`).join('')}</div>` : '<div class="empty">None right now.</div>';
-    $('#mv-dips').innerHTML = moverList(mv.dips, r => `${gp(r.m)} ${signedPct(r.change)}`);
-    $('#mv-spikes').innerHTML = moverList(mv.spikes, r => `${gp(r.m)} ${signedPct(r.change)}`);
-    $('#mv-surges').innerHTML = moverList(mv.surges, r => `${r.volSurge.toFixed(1)}× vol · ${signedPct(r.change)}`);
-
-    const sk = [...derived.recipes, ...derived.alchs].filter(r => r.canDo !== false && r.profit > 0 && r.outVol > 5).sort((a, b) => b.gpHr - a.gpHr).slice(0, 6);
-    $('#d-skill').innerHTML = sk.length ? `<div class="list-compact">${sk.map(r => `<div class="r"><span>${chip(r.outs[0]?.it || r.ins[0].it, 1)} <b>${esc(r.name)}</b> <span class="muted small">${r.skill ? r.skill + ' ' + r.level : 'no skill'}</span></span><span class="num">${signed(r.gpHr)}/hr</span></div>`).join('')}</div><p class="small muted">${levels() ? 'Filtered to your levels.' : 'Load your character to filter by your levels.'} See <a href="#skilling">Skilling Profits</a> for everything.</p>` : '<div class="empty">No data yet.</div>';
+    if (!freeSlots) { out.innerHTML = '<div class="empty">All your GE slots are in use. Finish a trade to get a new suggestion.</div>'; return; }
+    if (!res.chosen.length && tied && freeCash < budget() * 0.1) { out.innerHTML = `<div class="empty">Your cash is tied up in pinned trades (${gp(tied)}). Finish one, or raise "Cash to use", to get new suggestions.</div>`; return; }
+    if (!res.chosen.length) { out.innerHTML = '<div class="empty">No flips fit these settings. Try more cash, a longer time window, or a higher risk level.</div>'; return; }
+    out.innerHTML = `<div class="notice">Expected profit: <b>${gp(res.profit)}</b> using ${gp(res.used)} of ${gp(freeCash)} free cash in ${res.chosen.length} of ${freeSlots} free slot(s). Per round of buy limits (4h).</div>`;
+    out.appendChild(table('plan', [
+      { key: 'name', label: 'Item', fmt: r => itemLink(r.id), sort: r => r.name },
+      { key: 'cost', label: 'Cost', num: 1, fmt: r => gp(r.cost) },
+      { key: 'expProfit', label: 'Profit', num: 1, fmt: r => signed(r.expProfit) },
+      { key: 'fillHours', label: 'Fill time', num: 1, fmt: r => E.fmtHours(r.fillHours) },
+      { key: 'conf', label: 'Confidence', fmt: r => confBadge(r.conf) },
+      { key: 'act', label: '', fmt: () => '<button class="sm primary" data-act="pin">Pin</button>' },
+    ], res.chosen, {
+      sortKey: 'expProfit',
+      detail: flipDetail,
+      onAction: (a, r) => { if (a === 'pin') { trackFlip(r, r.units); this.update(true); } },
+    }));
   },
 };
 
@@ -452,7 +496,7 @@ const Flips = {
       { key: 'profit4h', label: 'Profit / 4h', num: 1, fmt: r => signed(r.profit4h) },
       { key: 'fillHours', label: 'Fill time', num: 1, fmt: r => E.fmtHours(r.fillHours) },
       { key: 'conf', label: 'Confidence', fmt: r => confBadge(r.conf) },
-      { key: 'act', label: '', fmt: () => '<button class="sm" data-act="track">Track</button>' },
+      { key: 'act', label: '', fmt: () => '<button class="sm" data-act="track">Pin</button>' },
     ], rows, { sortKey: preset.sort, detail: flipDetail, onAction: (a, r) => a === 'track' && trackFlip(r) }));
   },
 };
@@ -614,14 +658,14 @@ const Analysis = {
             <div class="r"><span>Realistic qty / 4h</span><span class="num">${num(f.units4h)}</span></div>
             <div class="r"><span>Profit / 4h</span><span class="num">${signed(f.profit4h)}</span></div>
             <div class="r"><span>Confidence</span>${confBadge(f.conf)}</div>
-          </div><button class="primary" style="margin-top:10px" id="a-track-q">Track this flip</button>` : '<p class="muted">No profitable quick flip right now (spread too small after tax, or too few trades).</p>'}</div>
+          </div><button class="primary" style="margin-top:10px" id="a-track-q">Pin this flip</button>` : '<p class="muted">No profitable quick flip right now (spread too small after tax, or too few trades).</p>'}</div>
         <div class="panel"><h3>🧘 Patient flip</h3>
           <p class="small muted">Bid near the cheap end of the last 6h and ask near the expensive end. Slower to fill, bigger margin.</p>
           <div class="list-compact">
             <div class="r"><span>Buy offer</span><b class="num">${gp(a.patientBuy)}</b></div>
             <div class="r"><span>Sell offer</span><b class="num">${gp(a.patientSell)}</b></div>
             <div class="r"><span>Profit each</span><span class="num">${a.patientMargin != null ? signed(a.patientMargin) : '—'}</span></div>
-          </div>${a.patientMargin > 0 ? '<button style="margin-top:10px" id="a-track-p">Track patient flip</button>' : ''}</div>
+          </div>${a.patientMargin > 0 ? '<button style="margin-top:10px" id="a-track-p">Pin patient flip</button>' : ''}</div>
         <div class="panel"><h3>🔮 Looking ahead</h3>
           ${a.proj1 ? `<div class="list-compact">
             <div class="r"><span>In 1 hour</span><span class="num">${gp(a.proj1.mid)} <span class="muted small">(${gp(a.proj1.lo)}–${gp(a.proj1.hi)})</span></span></div>
@@ -643,8 +687,8 @@ const Analysis = {
     $('#a-track-q')?.addEventListener('click', () => trackFlip(f));
     $('#a-track-p')?.addEventListener('click', () => {
       const units = Math.max(1, Math.min(it.limit || 1e9, f?.units4h || Math.floor(budget() / a.patientBuy)));
-      addTrade({ id: it.id, qty: units, buyPrice: a.patientBuy, sellPrice: a.patientSell });
-      toast(`Tracking patient flip: buy ${num(units)} at ${gp(a.patientBuy)}.`);
+      addTrade({ id: it.id, qty: units, buyPrice: a.patientBuy, sellPrice: a.patientSell, buyLocked: true });
+      toast(`Pinned the patient flip to the Smart Plan on the Dashboard.`);
     });
   },
 };
@@ -762,8 +806,9 @@ const Trades = {
         t.sellPrice = p; t.stage = 'selling'; t.placedAt = Date.now(); break;
       }
       case 'reprice': {
-        const p = ask(t.stage === 'buying' ? 'New buy offer price?' : 'New sell offer price?', t.stage === 'buying' ? t.buyPrice : t.sellPrice); if (!p) return;
-        if (t.stage === 'buying') t.buyPrice = p; else t.sellPrice = p; t.placedAt = Date.now(); break;
+        const buySide = ['pinned', 'buying'].includes(t.stage);
+        const p = ask(buySide ? 'New buy offer price?' : 'New sell offer price?', buySide ? t.buyPrice : t.sellPrice); if (!p) return;
+        if (buySide) { t.buyPrice = p; t.buyLocked = true; } else t.sellPrice = p; t.placedAt = Date.now(); break;
       }
       case 'sold': {
         const p = ask('Sold at what price each?', t.sellPrice || a.sellNow); if (!p) return;
@@ -786,10 +831,10 @@ const Trades = {
           <div class="meta"><span>Qty ${num(t.qty)}</span><span>Bid/cost ${gp(t.buyPrice)}</span>${t.sellPrice ? `<span>Ask ${gp(t.sellPrice)}</span>` : ''}<span>Breakeven ${gp(a.breakeven)}</span>
           ${a.unrealized != null ? `<span>If sold now ${signed(a.unrealized)}</span>` : ''}<span>Updated ${E.fmtAge((Date.now() - t.placedAt) / 60000)} ago</span>${reset ? `<span>${reset}</span>` : ''}</div></div>
         <div class="acts">
-          ${t.stage === 'buying' ? '<button class="sm primary" data-act="bought">Bought ✓</button>' : ''}
+          ${['pinned', 'buying'].includes(t.stage) ? '<button class="sm primary" data-act="bought">Bought ✓</button>' : ''}
           ${t.stage === 'holding' ? '<button class="sm primary" data-act="list">Listed for sale</button>' : ''}
           ${t.stage !== 'holding' ? '<button class="sm" data-act="reprice">Change price</button>' : ''}
-          ${t.stage !== 'buying' ? '<button class="sm" data-act="sold">Sold ✓</button>' : ''}
+          ${['holding', 'selling'].includes(t.stage) ? '<button class="sm" data-act="sold">Sold ✓</button>' : ''}
           <button class="sm" data-act="remove">✕</button>
         </div>
         <div class="advice">${a.level === 'act' ? '👉 ' : a.level === 'warn' ? '⚠️ ' : '✅ '}${esc(a.text)}</div>
